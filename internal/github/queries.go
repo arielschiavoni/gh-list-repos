@@ -1,7 +1,6 @@
 package github
 
 import (
-	"fmt"
 	"log"
 
 	"github.com/cli/go-gh/v2/pkg/api"
@@ -36,7 +35,7 @@ type Repository struct {
 }
 
 func GetUserRepositories(username string) ([]Repository, error) {
-	fmt.Printf("Getting user repositories for %s ...\n", username)
+	log.Printf("Getting user repositories for %s ...\n", username)
 	client, err := api.DefaultGraphQLClient()
 	if err != nil {
 		log.Fatal(err)
@@ -45,14 +44,14 @@ func GetUserRepositories(username string) ([]Repository, error) {
 	var query GetUserRepositoriesQuery
 	variables := map[string]any{
 		"username": graphql.String(username),
-		"first":    graphql.Int(20),
+		"first":    graphql.Int(100),
 		"cursor":   (*graphql.String)(nil),
 	}
 	page := 1
 
 	var repos []Repository
 	for {
-		fmt.Printf("Getting page %d...\n", page)
+		log.Printf("Getting page %d for user %s ...\n", page, username)
 
 		err = client.Query("GetUserRepositories", &query, variables)
 		if err != nil {
@@ -60,14 +59,14 @@ func GetUserRepositories(username string) ([]Repository, error) {
 		}
 
 		if page == 1 {
-			fmt.Printf("Got the first page, TotalCount: %d\n", query.User.Repositories.TotalCount)
+			log.Printf("Got the first page, TotalCount: %d\n", query.User.Repositories.TotalCount)
 		}
+
+		repos = append(repos, query.User.Repositories.Nodes...)
 
 		if !query.User.Repositories.PageInfo.HasNextPage {
 			break
 		}
-
-		repos = append(repos, query.User.Repositories.Nodes...)
 
 		variables["cursor"] = graphql.String(query.User.Repositories.PageInfo.EndCursor)
 		page += 1
@@ -85,7 +84,7 @@ func GetUserRepositories(username string) ([]Repository, error) {
 }
 
 func GetOrgRepositories(org string) ([]Repository, error) {
-	fmt.Printf("Getting org repositories for %s ...\n", org)
+	log.Printf("Getting org repositories for %s ...\n", org)
 	client, err := api.DefaultGraphQLClient()
 	if err != nil {
 		log.Fatal(err)
@@ -102,7 +101,7 @@ func GetOrgRepositories(org string) ([]Repository, error) {
 
 	var repos []Repository
 	for {
-		fmt.Printf("Getting page %d...\n", page)
+		log.Printf("Getting page %d for org %s ...\n", page, org)
 
 		err = client.Query("GetOrgRepositories", &query, variables)
 		if err != nil {
@@ -110,14 +109,14 @@ func GetOrgRepositories(org string) ([]Repository, error) {
 		}
 
 		if page == 1 {
-			fmt.Printf("Got the first page, TotalCount: %d\n", query.Organization.Repositories.TotalCount)
+			log.Printf("Got the first page, TotalCount: %d\n", query.Organization.Repositories.TotalCount)
 		}
+
+		repos = append(repos, query.Organization.Repositories.Nodes...)
 
 		if !query.Organization.Repositories.PageInfo.HasNextPage {
 			break
 		}
-
-		repos = append(repos, query.Organization.Repositories.Nodes...)
 
 		variables["cursor"] = graphql.String(query.Organization.Repositories.PageInfo.EndCursor)
 		page += 1
