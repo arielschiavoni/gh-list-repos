@@ -35,7 +35,7 @@ type Repository struct {
 }
 
 func GetUserRepositories(username string) ([]Repository, error) {
-	log.Printf("Getting user repositories for %s ...\n", username)
+	log.Printf("[%s]: getting user repositories...\n", username)
 	client, err := api.DefaultGraphQLClient()
 	if err != nil {
 		log.Fatal(err)
@@ -51,7 +51,7 @@ func GetUserRepositories(username string) ([]Repository, error) {
 
 	var repos []Repository
 	for {
-		log.Printf("Getting page %d for user %s ...\n", page, username)
+		log.Printf("[%s]: getting page %d...\n", username, page)
 
 		err = client.Query("GetUserRepositories", &query, variables)
 		if err != nil {
@@ -59,7 +59,7 @@ func GetUserRepositories(username string) ([]Repository, error) {
 		}
 
 		if page == 1 {
-			log.Printf("Got the first page, TotalCount: %d\n", query.User.Repositories.TotalCount)
+			log.Printf("[%s]: this username has %d repos\n", username, query.User.Repositories.TotalCount)
 		}
 
 		repos = append(repos, query.User.Repositories.Nodes...)
@@ -84,7 +84,7 @@ func GetUserRepositories(username string) ([]Repository, error) {
 }
 
 func GetOrgRepositories(org string) ([]Repository, error) {
-	log.Printf("Getting org repositories for %s ...\n", org)
+	log.Printf("[%s]: getting org repositories...\n", org)
 	client, err := api.DefaultGraphQLClient()
 	if err != nil {
 		log.Fatal(err)
@@ -101,7 +101,7 @@ func GetOrgRepositories(org string) ([]Repository, error) {
 
 	var repos []Repository
 	for {
-		log.Printf("Getting page %d for org %s ...\n", page, org)
+		log.Printf("[%s]: getting page %d...\n", org, page)
 
 		err = client.Query("GetOrgRepositories", &query, variables)
 		if err != nil {
@@ -109,7 +109,7 @@ func GetOrgRepositories(org string) ([]Repository, error) {
 		}
 
 		if page == 1 {
-			log.Printf("Got the first page, TotalCount: %d\n", query.Organization.Repositories.TotalCount)
+			log.Printf("[%s]: this org has %d repos\n", org, query.Organization.Repositories.TotalCount)
 		}
 
 		repos = append(repos, query.Organization.Repositories.Nodes...)
