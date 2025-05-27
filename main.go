@@ -62,7 +62,7 @@ func main() {
 
 	// Print help if orgs and username are not specified
 	if username == "" && len(orgs) == 0 {
-		fmt.Println("Usage: gh-list-repos [--username <username>] [--orgs <org1,org2,...>] [--showTopics] [--cache-file <path>]")
+		fmt.Println("Usage: gh-list-repos [-username <username>] [-orgs <org1,org2,...>] [-show-topics]")
 		fmt.Println("\nAt least one of --username or --orgs must be provided")
 		flag.PrintDefaults()
 		os.Exit(1)
