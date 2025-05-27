@@ -14,7 +14,6 @@ import (
 )
 
 func main() {
-	// --- Logging Setup ---
 	// Use the standard log location in the user's home directory
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -37,70 +36,66 @@ func main() {
 	}
 
 	log.SetOutput(logFile)
-	defer logFile.Close() // Ensure the file is closed when main exits
+	// Ensure the file is closed when main exits
+	defer logFile.Close()
 
 	log.Printf("Logging output to %s", logFileName)
-	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile) // Add file and line number to log messages
+	// Add file and line number to log messages
+	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
 
-	// --- End Logging Setup ---
 	// Define flags
 	usernamePtr := flag.String("username", "", "GitHub username to fetch repositories for")
 	orgsPtr := flag.String("orgs", "", "Comma-separated list of GitHub organizations to fetch repositories for")
-	// Updated flag description to mention the default path
-	cacheFilePtr := flag.String("cache-file", "", "Path to a text file containing cached repository names (one per line). Defaults to ~/.local/share/gh-lor/cached-repos")
+	showTopicsPtr := flag.Bool("show-topics", false, "Shows repository topics")
 
 	// Parse flags
 	flag.Parse()
 
 	username := *usernamePtr
 	orgString := *orgsPtr
-	cacheFileFlagValue := *cacheFilePtr // Store the original value from the flag
+	showTopics := *showTopicsPtr
 
 	var orgs []string
 	if orgString != "" {
 		orgs = strings.Split(orgString, ",")
 	}
 
-	// Validate required arguments - check if *any* source is specified via flags
-	// If username is empty AND orgs is empty AND the cache-file flag was NOT provided
-	if username == "" && len(orgs) == 0 && cacheFileFlagValue == "" {
-		fmt.Println("Usage: gh-lor [--username <username>] [--orgs <org1,org2,...>] [--cache-file <path>]")
-		// Updated usage message for clarity regarding the default
-		fmt.Println("\nAt least one of --username, --orgs, or --cache-file must be provided, or the default cache file path (~/.local/share/gh-lor/cached-repos) will be used if no flags are provided.")
+	// Print help if orgs and username are not specified
+	if username == "" && len(orgs) == 0 {
+		fmt.Println("Usage: gh-lor [--username <username>] [--orgs <org1,org2,...>] [--showTopics] [--cache-file <path>]")
+		fmt.Println("\nAt least one of --username or --orgs must be provided")
 		flag.PrintDefaults()
 		os.Exit(1)
 	}
 
 	// Determine the actual cache file path to use
-	var cacheFile string
-	if cacheFileFlagValue == "" {
-		cacheFile = filepath.Join(appDir, "cached-repos")
-		log.Printf("Using default cache file path: %s", cacheFile)
-	} else {
-		// Use the path provided by the flag
-		cacheFile = cacheFileFlagValue
-		// Ensure the directory for the user-provided path exists (unless it's just a filename)
-		cacheDir := filepath.Dir(cacheFile)
-		if cacheDir != "." {
-			if err := os.MkdirAll(cacheDir, 0755); err != nil {
-				log.Fatalf("Error creating directory for cache file %s: %v", cacheDir, err)
-			}
+	cacheFile := filepath.Join(appDir, "repos")
+	if showTopics {
+		cacheFile += "_with_topics"
+	}
+	// Ensure the directory for the user-provided path exists (unless it's just a filename)
+	cacheDir := filepath.Dir(cacheFile)
+	if cacheDir != "." {
+		if err := os.MkdirAll(cacheDir, 0755); err != nil {
+			log.Fatalf("Error creating directory for cache file %s: %v", cacheDir, err)
 		}
 	}
 
-	// Channel to stream repository names
-	repoNameChannel := make(chan string)
-	var wg sync.WaitGroup // Main wait group for all data sources
+	// Channel to stream repository keys (name + topics)
+	repoKeyChannel := make(chan string)
+	// Main wait group for all data sources
+	var wg sync.WaitGroup
 
 	// Use sync.Map for concurrent-safe tracking of seen repository names
-	var seenRepos sync.Map // map[string]bool
+	var seenRepos sync.Map
 
-	// Helper function to send a repo name if not already seen
-	sendUniqueRepoName := func(name string) {
-		if name != "" {
-			_, loaded := seenRepos.LoadOrStore(name, true)
-			if !loaded { // Only send if the key was not already present
-				repoNameChannel <- name
+	// Helper function to send a repo key if not already seen
+	sendUniqueRepoKey := func(key string) {
+		if key != "" {
+			_, loaded := seenRepos.LoadOrStore(key, true)
+			// Only send if the key was not already present
+			if !loaded {
+				repoKeyChannel <- key
 			}
 		}
 	}
@@ -117,14 +112,15 @@ func main() {
 				// Log a warning if the file doesn't exist or can't be opened, but don't stop execution
 				// This allows the program to run with just GitHub sources, or start with an empty cache file
 				log.Printf("Warning: Error opening cache file %s: %v", cacheFile, err)
-				return // Don't stop the program, just skip cache reading
+				// Don't stop the program, just skip cache reading
+				return
 			}
 			defer file.Close()
 
 			scanner := bufio.NewScanner(file)
 			for scanner.Scan() {
-				repoName := strings.TrimSpace(scanner.Text())
-				sendUniqueRepoName(repoName)
+				repoKey := strings.TrimSpace(scanner.Text())
+				sendUniqueRepoKey(repoKey)
 			}
 			if err := scanner.Err(); err != nil {
 				log.Printf("Warning: Error reading cache file %s: %v", cacheFile, err)
@@ -135,10 +131,10 @@ func main() {
 	// Goroutine to fetch and stream repositories from GitHub API
 	if username != "" || len(orgs) > 0 {
 		wg.Add(1)
-		go func() {
-			defer wg.Done() // Decrement main wg when this goroutine finishes
 
-			var orgWG sync.WaitGroup // Wait group for organization fetches
+		go func() {
+			// Decrement main wg when this goroutine finishes
+			defer wg.Done()
 
 			// Get user repositories if username is provided
 			if username != "" {
@@ -147,28 +143,37 @@ func main() {
 					log.Printf("Error getting user repositories for %s: %v", username, err)
 				} else {
 					for _, repo := range userRepos {
-						sendUniqueRepoName(repo.NameWithOwner)
+						sendUniqueRepoKey(repo.Key(showTopics))
 					}
 				}
 			}
 
+			// Wait group for organization fetches
+			var orgWG sync.WaitGroup
+
 			// Get organization repositories if orgs are provided (in parallel)
 			if len(orgs) > 0 {
 				for _, org := range orgs {
-					orgWG.Add(1)                 // Increment org wg for each org goroutine
-					go func(currentOrg string) { // Launch new goroutine for each org
-						defer orgWG.Done() // Decrement org wg when this org goroutine finishes
+					// Increment org wg for each org goroutine
+					orgWG.Add(1)
+
+					// Launch new goroutine for each org
+					go func(currentOrg string) {
+						// Decrement org wg when this org goroutine finishes
+						defer orgWG.Done()
 
 						repos, err := github.GetOrgRepositories(currentOrg)
 						if err != nil {
 							// Log error but continue with other orgs
-							// log.Printf("Warning: Error getting organization repositories for %s: %v", currentOrg, err)
-							return // Stop processing this org's results on error
+							log.Printf("Warning: Error getting organization repositories for %s: %v", currentOrg, err)
+							// Stop processing this org's results on error
+							return
 						}
 						for _, repo := range repos {
-							sendUniqueRepoName(repo.NameWithOwner)
+							sendUniqueRepoKey(repo.Key(showTopics))
 						}
-					}(org) // Pass the current org value to the goroutine
+						// Pass the current org value to the goroutine
+					}(org)
 				}
 				orgWG.Wait() // Wait for all org goroutines to complete
 			}
@@ -179,12 +184,12 @@ func main() {
 	go func() {
 		// Wait for the file goroutine (if active) and the API goroutine (if active)
 		wg.Wait()
-		close(repoNameChannel)
+		close(repoKeyChannel)
 	}()
 
 	var collectedRepos []string
 	// Stream results from the channel to standard output (e.g., fzf)
-	for repoName := range repoNameChannel {
+	for repoName := range repoKeyChannel {
 		fmt.Println(repoName)
 		collectedRepos = append(collectedRepos, repoName)
 	}

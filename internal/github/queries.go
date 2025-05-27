@@ -1,8 +1,12 @@
 package github
 
 import (
+	"fmt"
 	"log"
+	"sort"
+	"strings"
 
+	"github.com/arielschiavoni/gh-lor/internal/utils"
 	"github.com/cli/go-gh/v2/pkg/api"
 	graphql "github.com/cli/shurcooL-graphql"
 )
@@ -29,9 +33,36 @@ type Repositories struct {
 }
 
 type Repository struct {
-	NameWithOwner string
-	IsFork        bool
-	IsArchived    bool
+	NameWithOwner    string
+	IsFork           bool
+	IsArchived       bool
+	RepositoryTopics RepositoryTopics `graphql:"repositoryTopics(first: 5)"`
+}
+
+// Creates a unique repo key based on the name and topics of the repository
+func (r Repository) Key(showTopics bool) string {
+	key := r.NameWithOwner
+
+	if showTopics && len(r.RepositoryTopics.Nodes) > 0 {
+		topics := make([]string, 0, len(r.RepositoryTopics.Nodes))
+		for _, t := range r.RepositoryTopics.Nodes {
+			topics = append(topics, t.Topic.Name)
+		}
+		// Sort the topics alphabetically
+		sort.Strings(topics)
+		joinedTopicNames := fmt.Sprintf("[%s]", strings.Join(topics, ","))
+		key = utils.AlignStrings(key, joinedTopicNames, 120)
+	}
+
+	return key
+}
+
+type RepositoryTopics struct {
+	Nodes []struct {
+		Topic struct {
+			Name string
+		}
+	}
 }
 
 func GetUserRepositories(username string) ([]Repository, error) {
