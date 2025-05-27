@@ -1,4 +1,4 @@
-module github.com/arielschiavoni/gh-lor
+module github.com/arielschiavoni/gh-list-repos
 
 go 1.24.1
 

@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/arielschiavoni/gh-lor/internal/utils"
+	"github.com/arielschiavoni/gh-list-repos/internal/utils"
 	"github.com/cli/go-gh/v2/pkg/api"
 	graphql "github.com/cli/shurcooL-graphql"
 )

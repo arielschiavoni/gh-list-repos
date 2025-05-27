@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/arielschiavoni/gh-lor/internal/github"
+	"github.com/arielschiavoni/gh-list-repos/internal/github"
 )
 
 func main() {
@@ -20,7 +20,7 @@ func main() {
 		log.Fatalf("Failed to get user home directory: %v", err)
 	}
 
-	appDir := filepath.Join(homeDir, ".local", "share", "gh-lor")
+	appDir := filepath.Join(homeDir, ".local", "share", "gh-list-repos")
 	logFileName := filepath.Join(appDir, "logs.log")
 
 	// Ensure the log directory exists
@@ -62,7 +62,7 @@ func main() {
 
 	// Print help if orgs and username are not specified
 	if username == "" && len(orgs) == 0 {
-		fmt.Println("Usage: gh-lor [--username <username>] [--orgs <org1,org2,...>] [--showTopics] [--cache-file <path>]")
+		fmt.Println("Usage: gh-list-repos [--username <username>] [--orgs <org1,org2,...>] [--showTopics] [--cache-file <path>]")
 		fmt.Println("\nAt least one of --username or --orgs must be provided")
 		flag.PrintDefaults()
 		os.Exit(1)
