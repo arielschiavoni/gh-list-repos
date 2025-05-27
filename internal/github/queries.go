@@ -11,6 +11,9 @@ import (
 	graphql "github.com/cli/shurcooL-graphql"
 )
 
+const pageSize = 100
+const maxLineWidth = 150
+
 type GetUserRepositoriesQuery struct {
 	User struct {
 		Repositories Repositories `graphql:"repositories(ownerAffiliations: OWNER, first: $first, after: $cursor)"`
@@ -19,7 +22,7 @@ type GetUserRepositoriesQuery struct {
 
 type GetOrgRepositoriesQuery struct {
 	Organization struct {
-		Repositories Repositories `graphql:"repositories(first: $first, after: $cursor, isArchived: $isArchived)"`
+		Repositories Repositories `graphql:"repositories(first: $first, after: $cursor)"`
 	} `graphql:"organization(login: $org)"`
 }
 
@@ -41,20 +44,40 @@ type Repository struct {
 
 // Creates a unique repo key based on the name and topics of the repository
 func (r Repository) Key(showTopics bool) string {
-	key := r.NameWithOwner
+	// the key is composed of a "left" side (NameWithOwner) and right side (IsArchived, IsFork, and topics)
+	left := r.NameWithOwner
+
+	var right []string
+
+	// Add warning color if the repository is archived
+	if r.IsArchived {
+		right = append(right, "archived")
+	}
+
+	if r.IsFork {
+		right = append(right, "fork")
+	}
 
 	if showTopics && len(r.RepositoryTopics.Nodes) > 0 {
 		topics := make([]string, 0, len(r.RepositoryTopics.Nodes))
-		for _, t := range r.RepositoryTopics.Nodes {
-			topics = append(topics, t.Topic.Name)
+		for _, node := range r.RepositoryTopics.Nodes {
+			topics = append(topics, node.Topic.Name)
 		}
 		// Sort the topics alphabetically
 		sort.Strings(topics)
-		joinedTopicNames := fmt.Sprintf("[%s]", strings.Join(topics, ","))
-		key = utils.AlignStrings(key, joinedTopicNames, 120)
+		right = append(right, fmt.Sprintf("[%s]", strings.Join(topics, ",")))
+
 	}
 
-	return key
+	// if the right part is empty then return only the left side
+	if len(right) == 0 {
+		return left
+	}
+
+	// if the right part contains either "archived", "fork" or a list of topics
+	// then it needs to be aligned to right side and the available space determined by maxLineWidth
+	// needs to be filled with spaces
+	return utils.AlignStrings(left, strings.Join(right, " | "), maxLineWidth)
 }
 
 type RepositoryTopics struct {
@@ -75,7 +98,7 @@ func GetUserRepositories(username string) ([]Repository, error) {
 	var query GetUserRepositoriesQuery
 	variables := map[string]any{
 		"username": graphql.String(username),
-		"first":    graphql.Int(100),
+		"first":    graphql.Int(pageSize),
 		"cursor":   (*graphql.String)(nil),
 	}
 	page := 1
@@ -104,14 +127,7 @@ func GetUserRepositories(username string) ([]Repository, error) {
 
 	}
 
-	var filteredRepos []Repository
-	for _, repo := range repos {
-		if !repo.IsArchived && !repo.IsFork {
-			filteredRepos = append(filteredRepos, repo)
-		}
-	}
-
-	return filteredRepos, nil
+	return repos, nil
 }
 
 func GetOrgRepositories(org string) ([]Repository, error) {
@@ -123,10 +139,9 @@ func GetOrgRepositories(org string) ([]Repository, error) {
 
 	var query GetOrgRepositoriesQuery
 	variables := map[string]any{
-		"org":        graphql.String(org),
-		"first":      graphql.Int(100),
-		"cursor":     (*graphql.String)(nil),
-		"isArchived": graphql.Boolean(false),
+		"org":    graphql.String(org),
+		"first":  graphql.Int(pageSize),
+		"cursor": (*graphql.String)(nil),
 	}
 	page := 1
 

@@ -68,23 +68,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Determine the actual cache file path to use
-	cacheFile := filepath.Join(appDir, "repos")
-	if showTopics {
-		cacheFile += "_with_topics"
-	}
-	// Ensure the directory for the user-provided path exists (unless it's just a filename)
-	cacheDir := filepath.Dir(cacheFile)
-	if cacheDir != "." {
-		if err := os.MkdirAll(cacheDir, 0755); err != nil {
-			log.Fatalf("Error creating directory for cache file %s: %v", cacheDir, err)
-		}
-	}
-
 	// Channel to stream repository keys (name + topics)
 	repoKeyChannel := make(chan string)
-	// Main wait group for all data sources
-	var wg sync.WaitGroup
 
 	// Use sync.Map for concurrent-safe tracking of seen repository names
 	var seenRepos sync.Map
@@ -100,38 +85,51 @@ func main() {
 		}
 	}
 
-	// Goroutine to stream cached repositories from file
-	// This goroutine runs if cacheFile is not empty (either default or flag value)
-	if cacheFile != "" {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			// Open the file - this will attempt to open the default or flag path
-			file, err := os.Open(cacheFile)
-			if err != nil {
-				// Log a warning if the file doesn't exist or can't be opened, but don't stop execution
-				// This allows the program to run with just GitHub sources, or start with an empty cache file
-				log.Printf("Warning: Error opening cache file %s: %v", cacheFile, err)
-				// Don't stop the program, just skip cache reading
-				return
-			}
-			defer file.Close()
-
-			scanner := bufio.NewScanner(file)
-			for scanner.Scan() {
-				repoKey := strings.TrimSpace(scanner.Text())
-				sendUniqueRepoKey(repoKey)
-			}
-			if err := scanner.Err(); err != nil {
-				log.Printf("Warning: Error reading cache file %s: %v", cacheFile, err)
-			}
-		}()
+	// Determine the actual cache file path to use
+	cacheFile := filepath.Join(appDir, "repos")
+	if showTopics {
+		cacheFile += "_with_topics"
+	}
+	// Ensure the directory for the user-provided path exists (unless it's just a filename)
+	cacheDir := filepath.Dir(cacheFile)
+	if cacheDir != "." {
+		if err := os.MkdirAll(cacheDir, 0755); err != nil {
+			log.Fatalf("Error creating directory for cache file %s: %v", cacheDir, err)
+		}
 	}
 
-	// Goroutine to fetch and stream repositories from GitHub API
+	// Main wait group for all data sources
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	// Goroutine to stream cached repositories from file
+	go func() {
+		defer wg.Done()
+		// Open the file - this will attempt to open the default or flag path
+		file, err := os.Open(cacheFile)
+		if err != nil {
+			// Log a warning if the file doesn't exist or can't be opened, but don't stop execution
+			// This allows the program to run with just GitHub sources, or start with an empty cache file
+			log.Printf("Warning: Error opening cache file %s: %v", cacheFile, err)
+			// Don't stop the program, just skip cache reading
+			return
+		}
+		defer file.Close()
+
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			repoKey := strings.TrimSpace(scanner.Text())
+			sendUniqueRepoKey(repoKey)
+		}
+		if err := scanner.Err(); err != nil {
+			log.Printf("Warning: Error reading cache file %s: %v", cacheFile, err)
+		}
+	}()
+
 	if username != "" || len(orgs) > 0 {
 		wg.Add(1)
 
+		// Goroutine to fetch and stream repositories from GitHub API
 		go func() {
 			// Decrement main wg when this goroutine finishes
 			defer wg.Done()
