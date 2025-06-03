@@ -16,13 +16,13 @@ const maxLineWidth = 150
 
 type GetUserRepositoriesQuery struct {
 	User struct {
-		Repositories Repositories `graphql:"repositories(ownerAffiliations: OWNER, first: $first, after: $cursor)"`
+		Repositories Repositories `graphql:"repositories(ownerAffiliations: OWNER, first: $first, after: $cursor, isArchived: $isArchived, isFork: $isFork)"`
 	} `graphql:"user(login: $username)"`
 }
 
 type GetOrgRepositoriesQuery struct {
 	Organization struct {
-		Repositories Repositories `graphql:"repositories(first: $first, after: $cursor)"`
+		Repositories Repositories `graphql:"repositories(first: $first, after: $cursor, isArchived: $isArchived, isFork: $isFork)"`
 	} `graphql:"organization(login: $org)"`
 }
 
@@ -42,8 +42,16 @@ type Repository struct {
 	RepositoryTopics RepositoryTopics `graphql:"repositoryTopics(first: 5)"`
 }
 
-// Creates a unique repo key based on the name and topics of the repository
-func (r Repository) Key(showTopics bool) string {
+type RepositoryTopics struct {
+	Nodes []struct {
+		Topic struct {
+			Name string
+		}
+	}
+}
+
+// Creates a unique repo description line based on the name and other repository details like topics
+func (r Repository) Line() string {
 	// the key is composed of a "left" side (NameWithOwner) and right side (IsArchived, IsFork, and topics)
 	left := r.NameWithOwner
 
@@ -58,7 +66,7 @@ func (r Repository) Key(showTopics bool) string {
 		right = append(right, "fork")
 	}
 
-	if showTopics && len(r.RepositoryTopics.Nodes) > 0 {
+	if len(r.RepositoryTopics.Nodes) > 0 {
 		topics := make([]string, 0, len(r.RepositoryTopics.Nodes))
 		for _, node := range r.RepositoryTopics.Nodes {
 			topics = append(topics, node.Topic.Name)
@@ -80,16 +88,8 @@ func (r Repository) Key(showTopics bool) string {
 	return utils.AlignStrings(left, strings.Join(right, " | "), maxLineWidth)
 }
 
-type RepositoryTopics struct {
-	Nodes []struct {
-		Topic struct {
-			Name string
-		}
-	}
-}
-
-func GetUserRepositories(username string) ([]Repository, error) {
-	log.Printf("[%s]: getting user repositories...\n", username)
+func ProcessUserRepositories(username string, noArchived bool, noFork bool, repoLinesChannel chan string) error {
+	log.Printf("[%s]: getting repositories...\n", username)
 	client, err := api.DefaultGraphQLClient()
 	if err != nil {
 		log.Fatal(err)
@@ -97,13 +97,23 @@ func GetUserRepositories(username string) ([]Repository, error) {
 
 	var query GetUserRepositoriesQuery
 	variables := map[string]any{
-		"username": graphql.String(username),
-		"first":    graphql.Int(pageSize),
-		"cursor":   (*graphql.String)(nil),
+		"username":   graphql.String(username),
+		"first":      graphql.Int(pageSize),
+		"cursor":     (*graphql.String)(nil),
+		"isArchived": (*graphql.Boolean)(nil),
+		"isFork":     (*graphql.Boolean)(nil),
 	}
+
+	if noArchived {
+		variables["isArchived"] = graphql.Boolean(false)
+	}
+
+	if noFork {
+		variables["isFork"] = graphql.Boolean(false)
+	}
+
 	page := 1
 
-	var repos []Repository
 	for {
 		log.Printf("[%s]: getting page %d...\n", username, page)
 
@@ -113,10 +123,13 @@ func GetUserRepositories(username string) ([]Repository, error) {
 		}
 
 		if page == 1 {
-			log.Printf("[%s]: this username has %d repos\n", username, query.User.Repositories.TotalCount)
+			log.Printf("[%s]: has %d repos\n", username, query.User.Repositories.TotalCount)
 		}
 
-		repos = append(repos, query.User.Repositories.Nodes...)
+		for _, repo := range query.User.Repositories.Nodes {
+			// send repo line to channel
+			repoLinesChannel <- repo.Line()
+		}
 
 		if !query.User.Repositories.PageInfo.HasNextPage {
 			break
@@ -127,11 +140,11 @@ func GetUserRepositories(username string) ([]Repository, error) {
 
 	}
 
-	return repos, nil
+	return nil
 }
 
-func GetOrgRepositories(org string) ([]Repository, error) {
-	log.Printf("[%s]: getting org repositories...\n", org)
+func ProcessOrgRepositories(org string, noArchived bool, noFork bool, repoLinesChannel chan string) error {
+	log.Printf("[%s]: getting repositories...\n", org)
 	client, err := api.DefaultGraphQLClient()
 	if err != nil {
 		log.Fatal(err)
@@ -139,13 +152,23 @@ func GetOrgRepositories(org string) ([]Repository, error) {
 
 	var query GetOrgRepositoriesQuery
 	variables := map[string]any{
-		"org":    graphql.String(org),
-		"first":  graphql.Int(pageSize),
-		"cursor": (*graphql.String)(nil),
+		"org":        graphql.String(org),
+		"first":      graphql.Int(pageSize),
+		"cursor":     (*graphql.String)(nil),
+		"isArchived": (*graphql.Boolean)(nil),
+		"isFork":     (*graphql.Boolean)(nil),
 	}
+
+	if noArchived {
+		variables["isArchived"] = graphql.Boolean(false)
+	}
+
+	if noFork {
+		variables["isFork"] = graphql.Boolean(false)
+	}
+
 	page := 1
 
-	var repos []Repository
 	for {
 		log.Printf("[%s]: getting page %d...\n", org, page)
 
@@ -155,10 +178,13 @@ func GetOrgRepositories(org string) ([]Repository, error) {
 		}
 
 		if page == 1 {
-			log.Printf("[%s]: this org has %d repos\n", org, query.Organization.Repositories.TotalCount)
+			log.Printf("[%s]: has %d repos\n", org, query.Organization.Repositories.TotalCount)
 		}
 
-		repos = append(repos, query.Organization.Repositories.Nodes...)
+		for _, repo := range query.Organization.Repositories.Nodes {
+			// send repo line to channel
+			repoLinesChannel <- repo.Line()
+		}
 
 		if !query.Organization.Repositories.PageInfo.HasNextPage {
 			break
@@ -169,5 +195,5 @@ func GetOrgRepositories(org string) ([]Repository, error) {
 
 	}
 
-	return repos, nil
+	return nil
 }

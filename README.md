@@ -25,15 +25,17 @@ gh list-repos
 ```
 
 ```
-Usage: gh list-repos [-username <username>] [-orgs <org1,org2,...>] [-show-topics]
+Usage: gh list-repos [-username <username>] [-orgs <org1,org2,...>] [-no-archived] [-no-fork]
 
 At least one of --username or --orgs must be provided
-  -username string
-        GitHub username to fetch repositories for
+  -no-archived
+        Excludes archived repositories
+  -no-fork
+        Excludes forked repositories
   -orgs string
-        Comma-separated list of GitHub organizations to fetch repositories for
-  -show-topics
-        Shows repository topics
+        Comma-separated list of GitHub organizations to fetch repositories from
+  -username string
+        GitHub username to fetch repositories from
 ```
 
 Example combined with [fzf](https://github.com/junegunn/fzf)

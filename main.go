@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"flag"
 	"fmt"
 	"log"
@@ -44,16 +43,18 @@ func main() {
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
 
 	// Define flags
-	usernamePtr := flag.String("username", "", "GitHub username to fetch repositories for")
-	orgsPtr := flag.String("orgs", "", "Comma-separated list of GitHub organizations to fetch repositories for")
-	showTopicsPtr := flag.Bool("show-topics", false, "Shows repository topics")
+	usernamePtr := flag.String("username", "", "GitHub username to fetch repositories from")
+	orgsPtr := flag.String("orgs", "", "Comma-separated list of GitHub organizations to fetch repositories from")
+	noArchivedPtr := flag.Bool("no-archived", false, "Excludes archived repositories")
+	noForkPtr := flag.Bool("no-fork", false, "Excludes forked repositories")
 
 	// Parse flags
 	flag.Parse()
 
 	username := *usernamePtr
 	orgString := *orgsPtr
-	showTopics := *showTopicsPtr
+	noArchived := *noArchivedPtr
+	noFork := *noForkPtr
 
 	var orgs []string
 	if orgString != "" {
@@ -62,69 +63,17 @@ func main() {
 
 	// Print help if orgs and username are not specified
 	if username == "" && len(orgs) == 0 {
-		fmt.Println("Usage: gh list-repos [-username <username>] [-orgs <org1,org2,...>] [-show-topics]")
+		fmt.Println("Usage: gh list-repos [-username <username>] [-orgs <org1,org2,...>] [-no-archived] [-no-fork]")
 		fmt.Println("\nAt least one of --username or --orgs must be provided")
 		flag.PrintDefaults()
 		os.Exit(1)
 	}
 
-	// Channel to stream repository keys (name + topics)
-	repoKeyChannel := make(chan string)
-
-	// Use sync.Map for concurrent-safe tracking of seen repository names
-	var seenRepos sync.Map
-
-	// Helper function to send a repo key if not already seen
-	sendUniqueRepoKey := func(key string) {
-		if key != "" {
-			_, loaded := seenRepos.LoadOrStore(key, true)
-			// Only send if the key was not already present
-			if !loaded {
-				repoKeyChannel <- key
-			}
-		}
-	}
-
-	// Determine the actual cache file path to use
-	cacheFile := filepath.Join(appDir, "repos")
-	if showTopics {
-		cacheFile += "_with_topics"
-	}
-	// Ensure the directory for the user-provided path exists (unless it's just a filename)
-	cacheDir := filepath.Dir(cacheFile)
-	if cacheDir != "." {
-		if err := os.MkdirAll(cacheDir, 0755); err != nil {
-			log.Fatalf("Error creating directory for cache file %s: %v", cacheDir, err)
-		}
-	}
+	// Channel to send repository lines to
+	repoLinesChannel := make(chan string)
 
 	// Main wait group for all data sources
 	var wg sync.WaitGroup
-	wg.Add(1)
-
-	// Goroutine to stream cached repositories from file
-	go func() {
-		defer wg.Done()
-		// Open the file - this will attempt to open the default or flag path
-		file, err := os.Open(cacheFile)
-		if err != nil {
-			// Log a warning if the file doesn't exist or can't be opened, but don't stop execution
-			// This allows the program to run with just GitHub sources, or start with an empty cache file
-			log.Printf("Warning: Error opening cache file %s: %v", cacheFile, err)
-			// Don't stop the program, just skip cache reading
-			return
-		}
-		defer file.Close()
-
-		scanner := bufio.NewScanner(file)
-		for scanner.Scan() {
-			repoKey := strings.TrimSpace(scanner.Text())
-			sendUniqueRepoKey(repoKey)
-		}
-		if err := scanner.Err(); err != nil {
-			log.Printf("Warning: Error reading cache file %s: %v", cacheFile, err)
-		}
-	}()
 
 	if username != "" || len(orgs) > 0 {
 		wg.Add(1)
@@ -134,68 +83,70 @@ func main() {
 			// Decrement main wg when this goroutine finishes
 			defer wg.Done()
 
-			// Get user repositories if username is provided
+			// Wait group for user and organization fetches to run in parallel
+			var fetchWG sync.WaitGroup
+
+			// Get user repositories if username is provided (in parallel)
 			if username != "" {
-				userRepos, err := github.GetUserRepositories(username)
-				if err != nil {
-					log.Printf("Error getting user repositories for %s: %v", username, err)
-				} else {
-					for _, repo := range userRepos {
-						sendUniqueRepoKey(repo.Key(showTopics))
+				fetchWG.Add(1)
+
+				// Launch new goroutine for username
+				go func() {
+					defer fetchWG.Done()
+
+					err := github.ProcessUserRepositories(username, noArchived, noFork, repoLinesChannel)
+					if err != nil {
+						log.Printf("Error getting user repositories for %s: %v", username, err)
 					}
-				}
+				}()
 			}
 
-			// Wait group for organization fetches
-			var orgWG sync.WaitGroup
-
-			// Get organization repositories if orgs are provided (in parallel)
+			// Get organization repositories if orgs are provided
 			if len(orgs) > 0 {
 				for _, org := range orgs {
-					// Increment org wg for each org goroutine
-					orgWG.Add(1)
+					fetchWG.Add(1)
 
 					// Launch new goroutine for each org
 					go func(currentOrg string) {
-						// Decrement org wg when this org goroutine finishes
-						defer orgWG.Done()
+						// Decrement fetch wg when this org goroutine finishes
+						defer fetchWG.Done()
 
-						repos, err := github.GetOrgRepositories(currentOrg)
+						err := github.ProcessOrgRepositories(currentOrg, noArchived, noFork, repoLinesChannel)
 						if err != nil {
 							// Log error but continue with other orgs
 							log.Printf("Warning: Error getting organization repositories for %s: %v", currentOrg, err)
-							// Stop processing this org's results on error
-							return
-						}
-						for _, repo := range repos {
-							sendUniqueRepoKey(repo.Key(showTopics))
 						}
 						// Pass the current org value to the goroutine
 					}(org)
 				}
-				orgWG.Wait() // Wait for all org goroutines to complete
 			}
+
+			// Wait for all user and org goroutines to complete
+			fetchWG.Wait()
 		}()
 	}
 
 	// Goroutine to close the channel when all data source workers are done
 	go func() {
-		// Wait for the file goroutine (if active) and the API goroutine (if active)
+		// Wait for the API goroutine (if active)
 		wg.Wait()
-		close(repoKeyChannel)
+		close(repoLinesChannel)
 	}()
 
-	var collectedRepos []string
+	var repos []string
 	// Stream results from the channel to standard output (e.g., fzf)
-	for repoName := range repoKeyChannel {
+	for repoName := range repoLinesChannel {
 		fmt.Println(repoName)
-		collectedRepos = append(collectedRepos, repoName)
+		repos = append(repos, repoName)
 	}
 
-	// Implement saving the combined unique results to the cache file at the end
-	log.Printf("Saving %d unique repositories to cache file: %s", len(collectedRepos), cacheFile)
-	err = os.WriteFile(cacheFile, []byte(strings.Join(collectedRepos, "\n")+"\n"), 0644)
-	if err != nil {
-		log.Printf("Error writing cache file %s: %v", cacheFile, err)
-	}
+	// if isFileCacheEnabled {
+	// 	// Implement saving the combined unique results to the cache file at the end
+	// 	log.Printf("Saving %d unique repositories to cache file: %s", len(repos), cacheFile)
+	//
+	// 	err = os.WriteFile(cacheFile, []byte(strings.Join(repos, "\n")+"\n"), 0644)
+	// 	if err != nil {
+	// 		log.Printf("Error writing cache file %s: %v", cacheFile, err)
+	// 	}
+	// }
 }
